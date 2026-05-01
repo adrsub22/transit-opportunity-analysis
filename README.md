@@ -1,4 +1,4 @@
-## Transit Opportunity Analysis
+# Transit Opportunity Analysis
 
 A reproducible Python pipeline that combines U.S. Census ACS demographics, LEHD LODES employment data, and TIGER/Line geography to build a block-group-level **Transit Opportunity Index** for regional transit planning.
 
@@ -71,10 +71,12 @@ The default configuration runs **Bexar County, TX** as the example study area, c
 transit-opportunity-analysis/
 ├── README.md                  ← you are here
 ├── pipeline.py                ← the full pipeline
+├── harmonize_bg.py            ← 2010↔2020 BG and tract harmonization
 ├── requirements.txt
 ├── .gitignore
 └── docs/
     ├── methodology.md         ← why these choices were made; what the limitations are
+    ├── harmonization.md       ← the 2010→2020 boundary-change problem and how it's fixed
     └── data-dictionary.md     ← every field, defined
 ```
 
@@ -84,6 +86,7 @@ transit-opportunity-analysis/
 
 A few things to know before you trust the numbers. The longer version is in [`docs/methodology.md`](docs/methodology.md).
 
+- **Block group and tract boundaries changed between 2010 and 2020.** ACS vintages with end years ≤ 2020 use 2010 geography; later vintages use 2020 geography. The pipeline handles this by area-weighted apportionment of older vintages onto 2020 geography — see [`docs/harmonization.md`](docs/harmonization.md). Without that step, a "growth" map is partly real and partly an artifact of redistricting.
 - **ACS 5-year estimates smooth across 5 years.** The "2024" vintage is really 2020–2024.
 - **Disability data is published at tract level in Texas**, not block group. The pipeline applies the tract-level rate uniformly to every block group in the tract. This is documented in the output.
 - **LODES injects differential-privacy noise.** Very small block groups can have noisy or undercounted jobs.

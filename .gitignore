@@ -1,0 +1,26 @@
+# Outputs
+outputs/
+
+# TIGER downloads (large, regenerable)
+tl_*.zip
+tl_*_bg/
+
+# Census relationship file caches (regenerable)
+tab20_*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment
+.env
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

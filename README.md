@@ -98,8 +98,7 @@ A few things to know before you trust the numbers. The longer version is in [`do
 
 Originally built for service-planning use at a public transit agency. Designed to be reusable: change two FIPS codes at the top of the file and it runs anywhere in the U.S.
 
-## About
+## Author
 
 Built by Andrew Reyna, a transit planner / data analyst based in San Antonio.
-Currently working at VIA Metropolitan Transit, with
-a background in Urban Planning. Find me at adrsub22@gmail.com
+with a background in Urban Planning. Find me at adrsub22@gmail.com

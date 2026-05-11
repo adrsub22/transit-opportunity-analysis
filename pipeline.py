@@ -60,7 +60,12 @@ output_folder = "outputs"
 os.makedirs(output_folder, exist_ok=True)
 
 # Harmonization module (sits next to pipeline.py)
-from harmonize_bg import build_bg_crosswalk, harmonize_counts, validate_crosswalk
+from harmonize_bg import (
+    build_bg_crosswalk,
+    build_tract_crosswalk,
+    harmonize_counts,
+    validate_crosswalk,
+)
 
 # -----------------------------
 # Download LODES (jobs by workplace)
@@ -108,7 +113,8 @@ def fetch_acs(year):
 
     variables = [
         'B01003_001E',  # total population
-        'B02001_002E',  # white alone
+        'B02001_002E',  # white alone (subject to 2020 race methodology change)
+        'B03002_003E',  # non-Hispanic white alone (more stable across 2020 break)
         'B08301_001E',  # workers 16+
         'B08301_010E',  # transit commuters
         'B19013_001E',  # median household income
@@ -137,6 +143,7 @@ def fetch_acs(year):
     rename = {
         'B01003_001E': 'Tot_Pop',
         'B02001_002E': 'TotWhtPop',
+        'B03002_003E': 'NHWhtPop',
         'B08301_001E': 'Work_Pop',
         'B08301_010E': 'Pub_Transit',
         'B19013_001E': 'MHI',
@@ -148,14 +155,36 @@ def fetch_acs(year):
     df = df.rename(columns=rename)
 
     numeric = list(rename.values())
-    df[numeric] = df[numeric].apply(pd.to_numeric, errors='coerce').fillna(0)
+    df[numeric] = df[numeric].apply(pd.to_numeric, errors='coerce')
 
-    df['TotMinPop']  = df['Tot_Pop'] - df['TotWhtPop']
-    df['PovLess100'] = df['Less50Pov'] + df['50to99Pov']
+    # ACS uses sentinel values like -666666666 ("estimate not computable"),
+    # -222222222 ("estimate falls in the lowest interval"), etc. These appear
+    # primarily in MHI (B19013) but the filter is applied across all numeric
+    # ACS fields as a safeguard; valid counts never go negative anyway.
+    ACS_SENTINEL_THRESHOLD = -1_000_000
+    for col in numeric:
+        df.loc[df[col] < ACS_SENTINEL_THRESHOLD, col] = np.nan
 
-    df['MinPopPer']  = np.where(df['Tot_Pop']    > 0, (df['TotMinPop']  / df['Tot_Pop'])    * 100, 0)
-    df['AtBelowPov'] = np.where(df['PovStatDet'] > 0, (df['PovLess100'] / df['PovStatDet']) * 100, 0)
-    df['Transit%']   = np.where(df['Work_Pop']   > 0, (df['Pub_Transit'] / df['Work_Pop'])  * 100, 0)
+    # Counts can be safely zero-filled (a missing count is read as zero for
+    # population-weighted aggregations). MHI must stay NaN where missing —
+    # zero is not a meaningful default for a median, and zero-filling would
+    # contaminate any downstream weighted average of medians.
+    count_cols_zero_fill = [
+        'Tot_Pop', 'TotWhtPop', 'NHWhtPop', 'Work_Pop',
+        'Pub_Transit', 'PovStatDet', 'Less50Pov', '50to99Pov',
+    ]
+    df[count_cols_zero_fill] = df[count_cols_zero_fill].fillna(0)
+
+    # Two race-based minority measures: see docs/methodology.md for why both
+    # exist. NH-based variants are recommended for cross-vintage comparisons.
+    df['TotMinPop']   = df['Tot_Pop'] - df['TotWhtPop']
+    df['TotMinPopNH'] = df['Tot_Pop'] - df['NHWhtPop']
+    df['PovLess100']  = df['Less50Pov'] + df['50to99Pov']
+
+    df['MinPopPer']   = np.where(df['Tot_Pop']    > 0, (df['TotMinPop']    / df['Tot_Pop'])    * 100, 0)
+    df['MinPopPerNH'] = np.where(df['Tot_Pop']    > 0, (df['TotMinPopNH']  / df['Tot_Pop'])    * 100, 0)
+    df['AtBelowPov']  = np.where(df['PovStatDet'] > 0, (df['PovLess100']   / df['PovStatDet']) * 100, 0)
+    df['Transit%']    = np.where(df['Work_Pop']   > 0, (df['Pub_Transit']  / df['Work_Pop'])   * 100, 0)
 
     return df
 
@@ -364,7 +393,7 @@ if HARMONIZE_PRE_2020_BG and any(y <= PRE_2020_VINTAGE_THRESHOLD for y in acs_ye
     validate_crosswalk(tract_crosswalk)
 
     bg_count_cols = [
-        'Tot_Pop', 'TotWhtPop', 'Work_Pop', 'Pub_Transit',
+        'Tot_Pop', 'TotWhtPop', 'NHWhtPop', 'Work_Pop', 'Pub_Transit',
         'PovStatDet', 'Less50Pov', '50to99Pov',
     ]
 
@@ -399,8 +428,14 @@ if HARMONIZE_PRE_2020_BG and any(y <= PRE_2020_VINTAGE_THRESHOLD for y in acs_ye
         mhi_src = sub.merge(bg_crosswalk, left_on='BGGEOID', right_on='GEOID_2010', how='inner')
         mhi_src['MHI']     = pd.to_numeric(mhi_src['MHI'],     errors='coerce')
         mhi_src['Tot_Pop'] = pd.to_numeric(mhi_src['Tot_Pop'], errors='coerce')
-        mhi_src['_w']      = mhi_src['Tot_Pop'].fillna(0) * mhi_src['weight']
-        mhi_src['_wMHI']   = mhi_src['MHI'].fillna(0)     * mhi_src['_w']
+
+        # Drop rows where MHI is missing (sentinel-filtered upstream) before
+        # the weighted average. Including them with fillna(0) would treat
+        # missing-income BGs as zero-income and pull the average toward zero.
+        mhi_src = mhi_src.dropna(subset=['MHI'])
+
+        mhi_src['_w']    = mhi_src['Tot_Pop'].fillna(0) * mhi_src['weight']
+        mhi_src['_wMHI'] = mhi_src['MHI']               * mhi_src['_w']
 
         mhi_agg = (
             mhi_src.groupby('GEOID_2020', as_index=False)
@@ -418,12 +453,14 @@ if HARMONIZE_PRE_2020_BG and any(y <= PRE_2020_VINTAGE_THRESHOLD for y in acs_ye
         # Recompute derived percentages from harmonized counts.
         # `.replace(0, np.nan)` on denominators avoids the numexpr 0/0 issue;
         # the np.where guard then produces 0 for those rows as before.
-        out['TotMinPop']  = out['Tot_Pop']    - out['TotWhtPop']
-        out['PovLess100'] = out['Less50Pov']  + out['50to99Pov']
+        out['TotMinPop']   = out['Tot_Pop']    - out['TotWhtPop']
+        out['TotMinPopNH'] = out['Tot_Pop']    - out['NHWhtPop']
+        out['PovLess100']  = out['Less50Pov']  + out['50to99Pov']
 
-        out['MinPopPer']  = np.where(out['Tot_Pop']    > 0, (out['TotMinPop']   / out['Tot_Pop'].replace(0, np.nan))    * 100, 0)
-        out['AtBelowPov'] = np.where(out['PovStatDet'] > 0, (out['PovLess100']  / out['PovStatDet'].replace(0, np.nan)) * 100, 0)
-        out['Transit%']   = np.where(out['Work_Pop']   > 0, (out['Pub_Transit'] / out['Work_Pop'].replace(0, np.nan))   * 100, 0)
+        out['MinPopPer']   = np.where(out['Tot_Pop']    > 0, (out['TotMinPop']    / out['Tot_Pop'].replace(0, np.nan))    * 100, 0)
+        out['MinPopPerNH'] = np.where(out['Tot_Pop']    > 0, (out['TotMinPopNH']  / out['Tot_Pop'].replace(0, np.nan))    * 100, 0)
+        out['AtBelowPov']  = np.where(out['PovStatDet'] > 0, (out['PovLess100']   / out['PovStatDet'].replace(0, np.nan)) * 100, 0)
+        out['Transit%']    = np.where(out['Work_Pop']   > 0, (out['Pub_Transit']  / out['Work_Pop'].replace(0, np.nan))   * 100, 0)
 
         # Attach the population-weighted MHI approximation.
         out = out.merge(mhi_agg, on='BGGEOID', how='left')
@@ -651,10 +688,10 @@ final_gdf["Combined_Growth_Index"] = (
 # Composite indices
 # -----------------------------
 final_gdf['Transit_Dependency_Index'] = (
-    final_gdf['AtBelowPov'] * 0.30 +
-    final_gdf['MinPopPer']  * 0.25 +
-    final_gdf['Transit%']   * 0.25 +
-    final_gdf['DisabPct']   * 0.20
+    final_gdf['AtBelowPov']  * 0.30 +
+    final_gdf['MinPopPerNH'] * 0.25 +
+    final_gdf['Transit%']    * 0.25 +
+    final_gdf['DisabPct']    * 0.20
 )
 
 final_gdf['Transit_Supportive_Density_Index'] = final_gdf['pop_job_den'] * 10
@@ -719,6 +756,26 @@ summary_df = summary_df[[
 # Glossary (ships with the Excel output)
 # -----------------------------
 glossary = pd.DataFrame([
+
+    ("Race_Variables_Note",
+     """Two race-based minority measures are produced. Use the NH variants
+when comparing across the 2019 / 2024 ACS vintage break.
+
+TotMinPop / MinPopPer (based on B02001_002E, White Alone, race-only):
+  Tot_Pop minus White-Alone count. Subject to a substantial methodology
+  change between the 2019 ACS and 2024 ACS: the 2020 Census changed how
+  race is captured, and many Hispanic respondents who previously marked
+  'White alone' now mark 'Some Other Race' or 'Two or More Races'.
+  Cross-vintage shifts in this measure conflate real demographic change
+  with the underlying methodology change.
+
+TotMinPopNH / MinPopPerNH (based on B03002_003E, Non-Hispanic White Alone):
+  Tot_Pop minus Non-Hispanic White Alone count. More stable across the
+  2019 / 2024 vintage break because it captures Hispanic populations as
+  part of 'minority' regardless of how they answer the race question.
+  Still affected by the 2020 methodology change, but to a much smaller
+  degree. Recommended for cross-vintage comparisons.
+"""),
 
     ("MHI",
      """Median household income (ACS Table B19013_001E).
@@ -813,13 +870,14 @@ Calculation:
 
 Calculation:
   Transit_Dependency_Index =
-      (AtBelowPov * 0.30) +
-      (MinPopPer  * 0.25) +
-      (Transit%   * 0.25) +
-      (DisabPct   * 0.20)
+      (AtBelowPov   * 0.30) +
+      (MinPopPerNH  * 0.25) +
+      (Transit%     * 0.25) +
+      (DisabPct     * 0.20)
 
-Note: DisabPct is sourced at the tract level because B18101 is
-not published at block group geography for Texas.
+Uses the NH-based race measure (MinPopPerNH) for cross-vintage stability —
+see the Race_Variables_Note entry. DisabPct is sourced at the tract level
+because B18101 is not published at block group geography for Texas.
 """),
 
     ("Transit_Supportive_Density_Index",

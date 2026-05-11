@@ -43,13 +43,28 @@ The pipeline pulls two vintages of each (default ACS 2019 / 2024 and LODES 2019 
 
 ## Geographic harmonization across decennial vintages
 
-Block-group and tract boundaries are redrawn at every decennial census. ACS 5-year vintages with end years up to and including 2020 are published on **2010 geography**; vintages from 2021 onward use **2020 geography**. A naive join across this break — which is what most planners do — silently mismatches block groups that were split, merged, renumbered, or boundary-shifted, and contaminates growth metrics with what is really redistricting noise.
+This is the part of the pipeline that solves a problem most multi-year block-group analyses get wrong. In short: block-group and tract boundaries are redrawn at every decennial census. ACS 5-year vintages with end years up to and including 2020 are published on **2010 geography**; vintages from 2021 onward use **2020 geography**. A naive join across this break — which is what most planners do — silently mismatches block groups that were split, merged, renumbered, or boundary-shifted, and contaminates growth metrics with what is really redistricting noise.
 
-The fix is geographic harmonization. For every pre-2020 ACS vintage, the pipeline apportions count variables onto 2020 geography using the Census Bureau's official 2020-to-2010 BG and tract Relationship Files, weighted by the share of the older unit's land area falling in each newer unit. Percentages are then recomputed from the harmonized counts. Median household income, which has no meaningful sub-area decomposition, is dropped from the harmonized rows rather than faked.
+The fix is geographic harmonization. For every pre-2020 ACS vintage, the pipeline apportions count variables onto 2020 geography using the Census Bureau's official 2020-to-2010 BG and tract Relationship Files, weighted by the share of the older unit's land area falling in each newer unit. Percentages are then recomputed from the harmonized counts. Median household income, which has no clean sub-area decomposition, is handled as a population-weighted average of the source-BG medians — an approximation, not a true median, and flagged as such in both the data dictionary and the output Glossary.
 
 This is implemented as a separate module ([`harmonize_bg.py`](../harmonize_bg.py)) and documented in detail in [`docs/harmonization.md`](harmonization.md). It runs by default and can be disabled via the `HARMONIZE_PRE_2020_BG` flag at the top of `pipeline.py` — useful for confirming, in a side-by-side run, that the harmonization actually changes results in the way you'd expect.
 
 The current implementation uses area weighting. Population weighting (using 2010 decennial block populations) would be more accurate where density varies sharply within a redrawn unit, and is the obvious next refinement.
+
+---
+
+## Race variables and the 2020 methodology change
+
+The 2020 decennial census materially changed how race is captured. The questionnaire was redesigned to let respondents provide more detailed write-in answers, and the tabulation rules around how Hispanic respondents are classified by race changed as well. The practical effect in the ACS: between the 2019 5-year vintage and the 2024 5-year vintage, a substantial number of Hispanic respondents who previously identified as "White alone" on the race question now identify as "Some Other Race alone" or "Two or More Races." In Hispanic-majority areas, the apparent White-alone share dropped sharply across the vintage break, and the apparent non-white share rose by similar amounts — almost entirely as an artifact of the methodology change rather than real demographic shift.
+
+A naive "% non-white = Tot_Pop − White alone" computed from ACS B02001 will pick up most of that artifact. Pre-2020 the same neighborhood might appear ~20% non-white; post-2020 the same neighborhood might appear ~70% non-white, with the difference dominated by reclassification rather than population change.
+
+The pipeline handles this by computing two race-based minority measures:
+
+- **`MinPopPer`** — based on ACS B02001_002E (White alone, race-only). Provided for backward compatibility and for single-vintage analyses where the methodology change is not an issue. **Not recommended for cross-vintage comparisons.**
+- **`MinPopPerNH`** — based on ACS B03002_003E (Non-Hispanic White alone). Captures Hispanic populations as non-white regardless of how they answer the race question, which makes the measure much more stable across the 2019 / 2024 vintage break. Still affected by the methodology change at the margins, but the artifact is dramatically smaller. **Recommended for cross-vintage comparisons and used by the Transit Dependency Index.**
+
+The Transit Dependency Index uses `MinPopPerNH`. If you want to swap it back to the race-only measure for a specific run, the change is one line at the bottom of `pipeline.py`.
 
 ---
 
@@ -76,14 +91,14 @@ The pipeline produces three composite indices. Each combines several measured va
 ### 1. Transit Dependency Index
 
 ```
-Transit Dependency = AtBelowPov × 0.30
-                   + MinPopPer  × 0.25
-                   + Transit%   × 0.25
-                   + DisabPct   × 0.20
+Transit Dependency = AtBelowPov   × 0.30
+                   + MinPopPerNH  × 0.25
+                   + Transit%     × 0.25
+                   + DisabPct     × 0.20
 ```
 
 - **Poverty (30%)** is weighted highest because it's the most consistent predictor of transit reliance in U.S. transportation research. Households below the poverty line have substantially lower vehicle access.
-- **Race / ethnicity (25%)** is included because of well-documented disparities in vehicle access and historical disinvestment, even after controlling for income.
+- **Race / ethnicity (25%)** is included because of well-documented disparities in vehicle access and historical disinvestment, even after controlling for income. The index uses `MinPopPerNH` (the non-Hispanic-white based measure) because it's stable across the 2019 / 2024 ACS vintage break — see *Race variables and the 2020 methodology change* above.
 - **Transit commute share (25%)** is a revealed-preference measure: it captures who already uses transit. It's weighted equal to race so that the dependency definition is informed by actual behavior, not just demographic proxies.
 - **Disability (20%)** is weighted lowest *only because* it's tract-derived (see above), so its block-group precision is lower. It's still included because people with disabilities have substantially higher transit reliance and are often invisible in pure income-based equity measures.
 

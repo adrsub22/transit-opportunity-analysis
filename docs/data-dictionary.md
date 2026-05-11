@@ -18,12 +18,17 @@ Every field in the output, what it means, and where it comes from. Grouped by ca
 
 ## Population and race
 
+The pipeline produces two race-based minority measures. The NH-based variants (`TotMinPopNH`, `MinPopPerNH`) are recommended when comparing across the 2019 / 2024 ACS vintage break — see [`methodology.md` → Race variables and the 2020 methodology change](methodology.md#race-variables-and-the-2020-methodology-change). The Transit Dependency Index uses `MinPopPerNH`.
+
 | Field | Description | Source |
 |---|---|---|
 | `Tot_Pop` | Total population | ACS B01003_001E |
-| `TotWhtPop` | White-alone population | ACS B02001_002E |
-| `TotMinPop` | Non-white population | Tot_Pop − TotWhtPop |
-| `MinPopPer` | % non-white | (TotMinPop / Tot_Pop) × 100 |
+| `TotWhtPop` | White-alone population (race only) | ACS B02001_002E |
+| `NHWhtPop` | Non-Hispanic White-alone population | ACS B03002_003E |
+| `TotMinPop` | Non-white population (race-only) | Tot_Pop − TotWhtPop |
+| `TotMinPopNH` | Non-Hispanic-non-white population | Tot_Pop − NHWhtPop |
+| `MinPopPer` | % non-white (race-only) | (TotMinPop / Tot_Pop) × 100 |
+| `MinPopPerNH` | % non-Hispanic-non-white (cross-vintage stable) | (TotMinPopNH / Tot_Pop) × 100 |
 
 ---
 
@@ -123,7 +128,7 @@ See [methodology.md → The three composite indices](methodology.md#the-three-co
 
 | Index | Formula |
 |---|---|
-| `Transit_Dependency_Index` | (AtBelowPov × 0.30) + (MinPopPer × 0.25) + (Transit% × 0.25) + (DisabPct × 0.20) |
+| `Transit_Dependency_Index` | (AtBelowPov × 0.30) + (MinPopPerNH × 0.25) + (Transit% × 0.25) + (DisabPct × 0.20) |
 | `Transit_Supportive_Density_Index` | (Pop_per_acre + Jobs_per_acre) × 10 |
 | `Jobs_Housing_Ratio` | Jobs / Tot_Pop |
 | `Jobs_Housing_Balance_Score` | 1 − \|1 − Jobs_Housing_Ratio\| |

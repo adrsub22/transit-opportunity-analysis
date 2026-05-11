@@ -88,6 +88,7 @@ A few things to know before you trust the numbers. The longer version is in [`do
 
 - **Block group and tract boundaries changed between 2010 and 2020.** ACS vintages with end years ≤ 2020 use 2010 geography; later vintages use 2020 geography. The pipeline handles this by area-weighted apportionment of older vintages onto 2020 geography — see [`docs/harmonization.md`](docs/harmonization.md). Without that step, a "growth" map is partly real and partly an artifact of redistricting.
 - **ACS 5-year estimates smooth across 5 years.** The "2024" vintage is really 2020–2024.
+- **The 2020 Census changed how race was captured**, which causes apparent shifts in race composition between pre- and post-2020 ACS vintages that aren't real demographic change. The pipeline produces two race-based measures: `MinPopPer` (race-only, single-vintage) and `MinPopPerNH` (non-Hispanic-white based, cross-vintage stable). The Transit Dependency Index uses the latter. See [`docs/methodology.md`](docs/methodology.md#race-variables-and-the-2020-methodology-change).
 - **Disability data is published at tract level in Texas**, not block group. The pipeline applies the tract-level rate uniformly to every block group in the tract. This is documented in the output.
 - **LODES injects differential-privacy noise.** Very small block groups can have noisy or undercounted jobs.
 - **The index weights are defensible, not definitive.** They reflect one planning framework. The methodology doc walks through the reasoning and how to tune them for a different context.
